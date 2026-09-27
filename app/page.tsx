@@ -1,69 +1,372 @@
-import Image from "next/image";
+"use client";
 
-export default function Home() {
+import { useEffect, useState, useMemo, useCallback } from "react";
+import { TaskItem, TaskFormData, TaskStatusType } from "@/types/task";
+import TaskCard from "@/components/TaskCard";
+import TaskModal from "@/components/TaskModal";
+import { 
+  Plus, 
+  Search, 
+  CheckCircle2, 
+  Clock, 
+  AlertCircle, 
+  Layers,
+  Sparkles,
+  RefreshCw
+} from "lucide-react";
+
+export default function HomePage() {
+  const [tasks, setTasks] = useState<TaskItem[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // Filter & Search states
+  const [selectedStatus, setSelectedStatus] = useState<string>("ALL");
+  const [searchQuery, setSearchQuery] = useState("");
+
+  // Modal states
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [editingTask, setEditingTask] = useState<TaskItem | null>(null);
+
+  // Fetch tasks from API
+  const fetchTasks = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      setError(null);
+      const res = await fetch("/api/tasks");
+      if (!res.ok) {
+        throw new Error("Failed to load tasks from server.");
+      }
+      const data = await res.json();
+      setTasks(data);
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError("Error connecting to server.");
+      }
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    let ignore = false;
+    async function loadInitial() {
+      try {
+        const res = await fetch("/api/tasks");
+        if (!res.ok) {
+          throw new Error("Failed to load tasks from server.");
+        }
+        const data = await res.json();
+        if (!ignore) {
+          setTasks(data);
+          setError(null);
+        }
+      } catch (err: unknown) {
+        if (!ignore) {
+          if (err instanceof Error) {
+            setError(err.message);
+          } else {
+            setError("Error connecting to server.");
+          }
+        }
+      } finally {
+        if (!ignore) {
+          setIsLoading(false);
+        }
+      }
+    }
+
+    loadInitial();
+    return () => {
+      ignore = true;
+    };
+  }, []);
+
+  // Create or Update task
+  const handleSaveTask = async (data: TaskFormData, id?: string) => {
+    if (id) {
+      // Update
+      const res = await fetch(`/api/tasks/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || "Failed to update task.");
+      }
+      const updated = await res.json();
+      setTasks((prev) => prev.map((t) => (t.id === id ? updated : t)));
+    } else {
+      // Create
+      const res = await fetch("/api/tasks", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(data),
+      });
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.error || "Failed to create task.");
+      }
+      const created = await res.json();
+      setTasks((prev) => [created, ...prev]);
+    }
+  };
+
+  // Delete task
+  const handleDeleteTask = async (id: string) => {
+    const res = await fetch(`/api/tasks/${id}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) {
+      const errorData = await res.json();
+      alert(errorData.error || "Failed to delete task.");
+      return;
+    }
+    setTasks((prev) => prev.filter((t) => t.id !== id));
+  };
+
+  // Quick Status change
+  const handleStatusChange = async (id: string, newStatus: TaskStatusType) => {
+    const res = await fetch(`/api/tasks/${id}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ status: newStatus }),
+    });
+    if (!res.ok) {
+      const errorData = await res.json();
+      alert(errorData.error || "Failed to update status.");
+      return;
+    }
+    const updated = await res.json();
+    setTasks((prev) => prev.map((t) => (t.id === id ? updated : t)));
+  };
+
+  // Filtered tasks
+  const filteredTasks = useMemo(() => {
+    return tasks.filter((task) => {
+      const matchesStatus =
+        selectedStatus === "ALL" || task.status === selectedStatus;
+      const matchesSearch =
+        task.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        (task.description &&
+          task.description.toLowerCase().includes(searchQuery.toLowerCase()));
+      return matchesStatus && matchesSearch;
+    });
+  }, [tasks, selectedStatus, searchQuery]);
+
+  // Statistics counters
+  const stats = useMemo(() => {
+    return {
+      total: tasks.length,
+      todo: tasks.filter((t) => t.status === "TODO").length,
+      inProgress: tasks.filter((t) => t.status === "IN_PROGRESS").length,
+      done: tasks.filter((t) => t.status === "DONE").length,
+    };
+  }, [tasks]);
+
   return (
-    <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
-        <Image
-          className="dark:invert h-5 w-[100px]"
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className="flex flex-col items-center gap-6 text-center sm:items-start sm:text-left">
-          <h1 className="max-w-xs text-3xl font-semibold leading-10 tracking-tight text-black dark:text-zinc-50">
-            To get started, edit the{" "}
-            <code className="rounded bg-black/[.06] px-1.5 py-0.5 font-mono text-[0.9em] dark:bg-white/[.08]">
-              page.tsx
-            </code>{" "}
-            file.
+    <div className="space-y-8">
+      {/* Hero & Intro Section */}
+      <section className="relative overflow-hidden rounded-3xl bg-gradient-to-br from-indigo-900 via-indigo-950 to-zinc-950 text-white p-8 sm:p-10 shadow-xl border border-indigo-800/40">
+        <div className="relative z-10 max-w-3xl">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold bg-white/10 text-indigo-200 backdrop-blur-sm border border-white/15 mb-4">
+            <Sparkles className="w-3.5 h-3.5 text-indigo-300" />
+            <span>Task & Team Management Platform</span>
+          </div>
+
+          <h1 className="text-3xl sm:text-4xl lg:text-5xl font-extrabold tracking-tight leading-tight mb-4">
+            Organize work, boost productivity, and deliver on time.
           </h1>
-          <p className="max-w-md text-lg leading-8 text-zinc-600 dark:text-zinc-400">
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              className="font-medium text-zinc-950 dark:text-zinc-50"
-            >
-              Learning
-            </a>{" "}
-            center.
+
+          <p className="text-base sm:text-lg text-indigo-100/80 mb-6 leading-relaxed">
+            Welcome to TaskFlow! Manage your daily tasks with real-time updates connected to Supabase PostgreSQL via Prisma ORM. No login required for preview.
           </p>
+
+          <div className="flex flex-wrap items-center gap-3">
+            <button
+              onClick={() => {
+                setEditingTask(null);
+                setIsModalOpen(true);
+              }}
+              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-white text-indigo-950 font-semibold text-sm hover:bg-indigo-50 transition shadow-lg shadow-black/20"
+            >
+              <Plus className="w-4 h-4 stroke-[2.5]" />
+              <span>Create Task</span>
+            </button>
+            <button
+              onClick={fetchTasks}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white/10 hover:bg-white/15 text-white text-sm font-medium transition backdrop-blur-sm border border-white/10"
+              title="Refresh tasks"
+            >
+              <RefreshCw className={`w-4 h-4 ${isLoading ? "animate-spin" : ""}`} />
+              <span>Refresh</span>
+            </button>
+          </div>
         </div>
-        <div className="flex flex-col gap-4 text-base font-medium sm:flex-row">
-          <a
-            className="flex h-12 w-full items-center justify-center gap-2 rounded-full bg-foreground px-5 text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] md:w-[158px]"
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className="dark:invert h-[14px] w-4"
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className="flex h-12 w-full items-center justify-center rounded-full border border-solid border-black/[.08] px-5 transition-colors hover:border-transparent hover:bg-black/[.04] dark:border-white/[.145] dark:hover:bg-[#1a1a1a] md:w-[158px]"
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
+
+        {/* Background decorative circles */}
+        <div className="absolute -top-24 -right-24 w-96 h-96 rounded-full bg-indigo-500/10 blur-3xl pointer-events-none" />
+        <div className="absolute -bottom-24 -left-24 w-80 h-80 rounded-full bg-purple-500/10 blur-3xl pointer-events-none" />
+      </section>
+
+      {/* Metrics Row */}
+      <section className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4">
+        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-4 shadow-sm flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-zinc-100 dark:bg-zinc-800 flex items-center justify-center text-zinc-600 dark:text-zinc-300">
+            <Layers className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">{stats.total}</div>
+            <div className="text-xs font-medium text-zinc-500">Total Tasks</div>
+          </div>
         </div>
-      </main>
+
+        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-4 shadow-sm flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-amber-50 dark:bg-amber-950/40 flex items-center justify-center text-amber-600">
+            <AlertCircle className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">{stats.todo}</div>
+            <div className="text-xs font-medium text-zinc-500">To Do</div>
+          </div>
+        </div>
+
+        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-4 shadow-sm flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-sky-50 dark:bg-sky-950/40 flex items-center justify-center text-sky-600">
+            <Clock className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">{stats.inProgress}</div>
+            <div className="text-xs font-medium text-zinc-500">In Progress</div>
+          </div>
+        </div>
+
+        <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-4 shadow-sm flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 flex items-center justify-center text-emerald-600">
+            <CheckCircle2 className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">{stats.done}</div>
+            <div className="text-xs font-medium text-zinc-500">Completed</div>
+          </div>
+        </div>
+      </section>
+
+      {/* Control Bar: Filters & Search */}
+      <section className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4">
+        {/* Status filter tabs */}
+        <div className="flex items-center gap-1.5 p-1 bg-zinc-100 dark:bg-zinc-900 rounded-xl border border-zinc-200 dark:border-zinc-800 overflow-x-auto">
+          {[
+            { label: "All", value: "ALL" },
+            { label: "To Do", value: "TODO" },
+            { label: "In Progress", value: "IN_PROGRESS" },
+            { label: "Done", value: "DONE" },
+          ].map((tab) => (
+            <button
+              key={tab.value}
+              onClick={() => setSelectedStatus(tab.value)}
+              className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition whitespace-nowrap ${
+                selectedStatus === tab.value
+                  ? "bg-white dark:bg-zinc-800 text-zinc-900 dark:text-zinc-100 shadow-sm"
+                  : "text-zinc-600 dark:text-zinc-400 hover:text-zinc-900 dark:hover:text-zinc-200"
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Search Input */}
+        <div className="relative flex-1 sm:max-w-xs">
+          <Search className="w-4 h-4 text-zinc-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search tasks..."
+            className="w-full pl-9 pr-4 py-2 text-sm rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 focus:outline-none focus:ring-2 focus:ring-indigo-500/20 focus:border-indigo-500"
+          />
+        </div>
+      </section>
+
+      {/* Tasks List / Grid */}
+      <section>
+        {isLoading ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {[1, 2, 3].map((i) => (
+              <div
+                key={i}
+                className="h-44 rounded-xl border border-zinc-200 dark:border-zinc-800 bg-white/50 dark:bg-zinc-900/50 animate-pulse p-5"
+              />
+            ))}
+          </div>
+        ) : error ? (
+          <div className="p-8 text-center rounded-2xl border border-rose-200 dark:border-rose-900/50 bg-rose-50/50 dark:bg-rose-950/20 text-rose-700 dark:text-rose-400">
+            <AlertCircle className="w-8 h-8 mx-auto mb-2" />
+            <p className="font-semibold text-sm mb-1">{error}</p>
+            <p className="text-xs text-rose-500 mb-4">Please make sure DATABASE_URL is configured properly.</p>
+            <button
+              onClick={fetchTasks}
+              className="px-4 py-1.5 rounded-lg bg-rose-600 text-white text-xs font-semibold hover:bg-rose-700 transition"
+            >
+              Try Again
+            </button>
+          </div>
+        ) : filteredTasks.length === 0 ? (
+          <div className="p-12 text-center rounded-2xl border border-dashed border-zinc-300 dark:border-zinc-800 bg-white/50 dark:bg-zinc-900/50">
+            <div className="w-12 h-12 mx-auto rounded-2xl bg-indigo-50 dark:bg-zinc-800 flex items-center justify-center text-indigo-600 dark:text-indigo-400 mb-3">
+              <Layers className="w-6 h-6" />
+            </div>
+            <h3 className="font-bold text-base text-zinc-800 dark:text-zinc-200 mb-1">
+              No tasks found
+            </h3>
+            <p className="text-xs text-zinc-500 dark:text-zinc-400 max-w-sm mx-auto mb-4">
+              {searchQuery || selectedStatus !== "ALL"
+                ? "No tasks match your current filters. Try resetting the search or filter."
+                : "Your task list is empty. Click the button below to add your first task!"}
+            </p>
+            <button
+              onClick={() => {
+                setEditingTask(null);
+                setIsModalOpen(true);
+              }}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-700 transition"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Create Task</span>
+            </button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {filteredTasks.map((task) => (
+              <TaskCard
+                key={task.id}
+                task={task}
+                onEdit={(t) => {
+                  setEditingTask(t);
+                  setIsModalOpen(true);
+                }}
+                onDelete={handleDeleteTask}
+                onStatusChange={handleStatusChange}
+              />
+            ))}
+          </div>
+        )}
+      </section>
+
+      {/* Task Modal for Create / Edit */}
+      <TaskModal
+        isOpen={isModalOpen}
+        onClose={() => {
+          setIsModalOpen(false);
+          setEditingTask(null);
+        }}
+        onSubmit={handleSaveTask}
+        initialData={editingTask}
+      />
     </div>
   );
 }
