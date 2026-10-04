@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getAuthenticatedUser } from "@/lib/auth";
 import { TaskStatus, TaskPriority } from "@prisma/client";
 
 // GET /api/tasks - Lấy danh sách tasks
@@ -24,6 +25,9 @@ export async function GET(request: Request) {
         },
         assignee: {
           select: { id: true, name: true, email: true }
+        },
+        creator: {
+          select: { id: true, name: true, email: true }
         }
       }
     });
@@ -41,6 +45,7 @@ export async function GET(request: Request) {
 // POST /api/tasks - Tạo task mới
 export async function POST(request: Request) {
   try {
+    const user = await getAuthenticatedUser(request);
     const body = await request.json();
     const { title, description, status, priority, dueDate, teamId, assigneeId } = body;
 
@@ -73,7 +78,19 @@ export async function POST(request: Request) {
         dueDate: dueDate ? new Date(dueDate) : null,
         teamId: teamId || null,
         assigneeId: assigneeId || null,
+        creatorId: user?.id || null,
       },
+      include: {
+        team: {
+          select: { id: true, name: true }
+        },
+        assignee: {
+          select: { id: true, name: true, email: true }
+        },
+        creator: {
+          select: { id: true, name: true, email: true }
+        }
+      }
     });
 
     return NextResponse.json(newTask, { status: 201 });

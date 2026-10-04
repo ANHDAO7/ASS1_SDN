@@ -1,29 +1,55 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
+import { getAuthenticatedUser } from "@/lib/auth";
 import { TaskStatus, TaskPriority } from "@prisma/client";
 
-// PUT /api/tasks/[id] - Cập nhật task theo ID
+// PUT /api/tasks/[id] – Cập nhật task (Thành viên team có thể cập nhật chi tiết, trạng thái, độ ưu tiên)
 export async function PUT(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id } = await params;
+    const user = await getAuthenticatedUser(request);
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
 
+    const { id } = await params;
     if (!id) {
       return NextResponse.json({ error: "Task ID is required" }, { status: 400 });
     }
 
     const existingTask = await prisma.task.findUnique({
       where: { id },
+      include: {
+        team: {
+          include: {
+            members: { select: { userId: true } },
+          },
+        },
+      },
     });
 
     if (!existingTask) {
       return NextResponse.json({ error: "Task not found" }, { status: 404 });
     }
 
+    // Nếu task thuộc về một team, kiểm tra xem user có phải thành viên team không
+    if (existingTask.team) {
+      const isMember =
+        existingTask.team.ownerId === user.id ||
+        existingTask.team.members.some((m) => m.userId === user.id);
+
+      if (!isMember) {
+        return NextResponse.json(
+          { error: "Forbidden: You are not a member of this task's team" },
+          { status: 403 }
+        );
+      }
+    }
+
     const body = await request.json();
-    const { title, description, status, priority, dueDate, teamId, assigneeId } = body;
+    const { title, description, status, priority, dueDate, assigneeId } = body;
 
     const updateData: {
       title?: string;
@@ -31,7 +57,6 @@ export async function PUT(
       status?: TaskStatus;
       priority?: TaskPriority;
       dueDate?: Date | null;
-      teamId?: string | null;
       assigneeId?: string | null;
     } = {};
 
@@ -65,11 +90,20 @@ export async function PUT(
       updateData.dueDate = dueDate ? new Date(dueDate) : null;
     }
 
-    if (teamId !== undefined) {
-      updateData.teamId = teamId || null;
-    }
-
     if (assigneeId !== undefined) {
+      if (assigneeId && existingTask.team) {
+        // Kiểm tra xem assignee có thuộc team không
+        const isAssigneeMember =
+          existingTask.team.ownerId === assigneeId ||
+          existingTask.team.members.some((m) => m.userId === assigneeId);
+
+        if (!isAssigneeMember) {
+          return NextResponse.json(
+            { error: "Assignee must be a member of the team" },
+            { status: 400 }
+          );
+        }
+      }
       updateData.assigneeId = assigneeId || null;
     }
 
@@ -81,6 +115,9 @@ export async function PUT(
           select: { id: true, name: true },
         },
         assignee: {
+          select: { id: true, name: true, email: true },
+        },
+        creator: {
           select: { id: true, name: true, email: true },
         },
       },
@@ -96,24 +133,49 @@ export async function PUT(
   }
 }
 
-// DELETE /api/tasks/[id] - Xóa task theo ID
+// DELETE /api/tasks/[id] – Xóa task
+// Quy định: Only the task creator, the assignee, or the team Owner can delete a task.
 export async function DELETE(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
-    const { id } = await params;
+    const user = await getAuthenticatedUser(request);
+    if (!user) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
 
+    const { id } = await params;
     if (!id) {
       return NextResponse.json({ error: "Task ID is required" }, { status: 400 });
     }
 
     const existingTask = await prisma.task.findUnique({
       where: { id },
+      include: {
+        team: {
+          select: { id: true, ownerId: true },
+        },
+      },
     });
 
     if (!existingTask) {
       return NextResponse.json({ error: "Task not found" }, { status: 404 });
+    }
+
+    // Kiểm tra quyền xóa: chỉ Task Creator, Assignee, hoặc Team Owner
+    const isTeamOwner = existingTask.team?.ownerId === user.id;
+    const isCreator = existingTask.creatorId === user.id;
+    const isAssignee = existingTask.assigneeId === user.id;
+
+    if (!isTeamOwner && !isCreator && !isAssignee) {
+      return NextResponse.json(
+        {
+          error:
+            "Forbidden: Only the task creator, the assignee, or the team Owner can delete this task",
+        },
+        { status: 403 }
+      );
     }
 
     await prisma.task.delete({
