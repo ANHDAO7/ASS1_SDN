@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getAuthenticatedUser } from "@/lib/auth";
 import { TaskStatus, TaskPriority } from "@prisma/client";
+import { createInAppNotification } from "@/lib/notifications";
+import { supabase } from "@/lib/supabase";
 
 // GET /api/tasks - Lấy danh sách tasks
 export async function GET(request: Request) {
@@ -92,6 +94,29 @@ export async function POST(request: Request) {
         }
       }
     });
+
+    if (teamId && assigneeId && assigneeId !== user?.id) {
+      await createInAppNotification({
+        userId: assigneeId,
+        title: "New Task Assigned",
+        content: `You were assigned the task "${newTask.title}".`,
+        type: "TASK_ASSIGNED",
+        link: `/teams/${teamId}`,
+      });
+    }
+
+    if (teamId) {
+      try {
+        const channel = supabase.channel(`team:${teamId}`);
+        await channel.send({
+          type: "broadcast",
+          event: "task_created",
+          payload: newTask,
+        });
+      } catch (e) {
+        console.warn("Could not broadcast task_created:", e);
+      }
+    }
 
     return NextResponse.json(newTask, { status: 201 });
   } catch (error) {

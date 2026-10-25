@@ -63,3 +63,24 @@ export interface TaskFormData {
   dueDate?: string;
   assigneeId?: string;
 }
+
+export interface MessageItem {
+  id: string;
+  content: string;
+  teamId: string;
+  senderId: string;
+  createdAt: string;
+  sender: UserProfile;
+}
+
+export interface NotificationItem {
+  id: string;
+  userId: string;
+  title: string;
+  content: string;
+  type: string;
+  link: string | null;
+  isRead: boolean;
+  createdAt: string;
+}
+

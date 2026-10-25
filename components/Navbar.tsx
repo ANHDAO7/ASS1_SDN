@@ -5,6 +5,7 @@ import { usePathname } from "next/navigation";
 import { CheckSquare, Users, LogIn, LogOut, Menu, X, UserPlus, User } from "lucide-react";
 import { useState } from "react";
 import { useAuth } from "@/lib/AuthContext";
+import NotificationBell from "@/components/NotificationBell";
 
 export default function Navbar() {
   const pathname = usePathname();
@@ -63,6 +64,8 @@ export default function Navbar() {
               <>
                 {user ? (
                   <div className="flex items-center gap-3">
+                    <NotificationBell />
+
                     <div className="flex items-center gap-2 px-3 py-1.5 rounded-xl bg-zinc-100 dark:bg-zinc-800/80 border border-zinc-200 dark:border-zinc-700 text-xs">
                       <div className="w-6 h-6 rounded-full bg-indigo-600 text-white flex items-center justify-center font-bold text-[11px]">
                         {user.name.charAt(0).toUpperCase()}
@@ -108,8 +111,9 @@ export default function Navbar() {
             )}
           </div>
 
-          {/* Mobile menu toggle */}
-          <div className="flex md:hidden">
+          {/* Mobile menu toggle & Mobile Notification */}
+          <div className="flex md:hidden items-center gap-2">
+            {user && <NotificationBell />}
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
               className="p-2 rounded-lg text-zinc-600 dark:text-zinc-300 hover:bg-zinc-100 dark:hover:bg-zinc-800 transition"

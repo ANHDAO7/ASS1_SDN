@@ -1,9 +1,11 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getAuthenticatedUser } from "@/lib/auth";
-import { TaskStatus, TaskPriority } from "@prisma/client";
+import { TaskStatus, TaskPriority, TeamMemberRole } from "@prisma/client";
+import { createInAppNotification } from "@/lib/notifications";
+import { supabase } from "@/lib/supabase";
 
-// PUT /api/tasks/[id] – Cập nhật task (Thành viên team có thể cập nhật chi tiết, trạng thái, độ ưu tiên)
+// PUT /api/tasks/[id] – Cập nhật task (Owner & Admin có thể sửa mọi task, Member chỉ sửa task của chính mình)
 export async function PUT(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -24,7 +26,7 @@ export async function PUT(
       include: {
         team: {
           include: {
-            members: { select: { userId: true } },
+            members: { select: { userId: true, role: true } },
           },
         },
       },
@@ -34,21 +36,36 @@ export async function PUT(
       return NextResponse.json({ error: "Task not found" }, { status: 404 });
     }
 
-    // Nếu task thuộc về một team, kiểm tra xem user có phải thành viên team không
+    // Nếu task thuộc về một team, kiểm tra quyền theo vai trò (Owner, Admin, Member)
     if (existingTask.team) {
-      const isMember =
-        existingTask.team.ownerId === user.id ||
-        existingTask.team.members.some((m) => m.userId === user.id);
+      const isOwner = existingTask.team.ownerId === user.id;
+      const callerMembership = existingTask.team.members.find(
+        (m) => m.userId === user.id
+      );
+      const isAdmin = callerMembership?.role === TeamMemberRole.ADMIN;
+      const isCreator = existingTask.creatorId === user.id;
+      const isAssignee = existingTask.assigneeId === user.id;
 
-      if (!isMember) {
+      if (!isOwner && !isAdmin && !isCreator && !isAssignee) {
         return NextResponse.json(
-          { error: "Forbidden: You are not a member of this task's team" },
+          {
+            error:
+              "Forbidden: Members can only update their own tasks (created by or assigned to them)",
+          },
+          { status: 403 }
+        );
+      }
+    } else {
+      // Task cá nhân (không thuộc team): chỉ creator mới được sửa
+      if (existingTask.creatorId && existingTask.creatorId !== user.id) {
+        return NextResponse.json(
+          { error: "Forbidden: You can only edit your own personal tasks" },
           { status: 403 }
         );
       }
     }
 
-    const body = await request.json();
+    const body = await request.json().catch(() => ({}));
     const { title, description, status, priority, dueDate, assigneeId } = body;
 
     const updateData: {
@@ -90,9 +107,11 @@ export async function PUT(
       updateData.dueDate = dueDate ? new Date(dueDate) : null;
     }
 
+    const isAssigneeChanged =
+      assigneeId !== undefined && assigneeId !== existingTask.assigneeId;
+
     if (assigneeId !== undefined) {
       if (assigneeId && existingTask.team) {
-        // Kiểm tra xem assignee có thuộc team không
         const isAssigneeMember =
           existingTask.team.ownerId === assigneeId ||
           existingTask.team.members.some((m) => m.userId === assigneeId);
@@ -123,6 +142,33 @@ export async function PUT(
       },
     });
 
+    // Nếu gán cho người khác và là người mới, gửi thông báo in-app
+    if (isAssigneeChanged && assigneeId && assigneeId !== user.id) {
+      await createInAppNotification({
+        userId: assigneeId,
+        title: "Task Assigned to You",
+        content: `You were assigned the task "${updatedTask.title}"${
+          existingTask.team ? ` in team "${existingTask.team.name}"` : ""
+        }.`,
+        type: "TASK_ASSIGNED",
+        link: existingTask.teamId ? `/teams/${existingTask.teamId}` : "/",
+      });
+    }
+
+    // Broadcast sự kiện task_updated qua Supabase Realtime nếu thuộc team
+    if (existingTask.teamId) {
+      try {
+        const channel = supabase.channel(`team:${existingTask.teamId}`);
+        await channel.send({
+          type: "broadcast",
+          event: "task_updated",
+          payload: updatedTask,
+        });
+      } catch (e) {
+        console.warn("Could not broadcast task_updated:", e);
+      }
+    }
+
     return NextResponse.json(updatedTask, { status: 200 });
   } catch (error) {
     console.error("Error updating task:", error);
@@ -134,7 +180,9 @@ export async function PUT(
 }
 
 // DELETE /api/tasks/[id] – Xóa task
-// Quy định: Only the task creator, the assignee, or the team Owner can delete a task.
+// Quy định:
+// - Owner và Admin có thể xóa bất kỳ task nào trong team
+// - Member chỉ có thể xóa task do chính mình tạo (creator)
 export async function DELETE(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -154,7 +202,9 @@ export async function DELETE(
       where: { id },
       include: {
         team: {
-          select: { id: true, ownerId: true },
+          include: {
+            members: { select: { userId: true, role: true } },
+          },
         },
       },
     });
@@ -163,24 +213,52 @@ export async function DELETE(
       return NextResponse.json({ error: "Task not found" }, { status: 404 });
     }
 
-    // Kiểm tra quyền xóa: chỉ Task Creator, Assignee, hoặc Team Owner
-    const isTeamOwner = existingTask.team?.ownerId === user.id;
-    const isCreator = existingTask.creatorId === user.id;
-    const isAssignee = existingTask.assigneeId === user.id;
-
-    if (!isTeamOwner && !isCreator && !isAssignee) {
-      return NextResponse.json(
-        {
-          error:
-            "Forbidden: Only the task creator, the assignee, or the team Owner can delete this task",
-        },
-        { status: 403 }
+    if (existingTask.team) {
+      const isOwner = existingTask.team.ownerId === user.id;
+      const callerMembership = existingTask.team.members.find(
+        (m) => m.userId === user.id
       );
+      const isAdmin = callerMembership?.role === TeamMemberRole.ADMIN;
+      const isCreator = existingTask.creatorId === user.id;
+
+      // Owner và Admin được xóa mọi task, Member chỉ được xóa task do mình tạo
+      if (!isOwner && !isAdmin && !isCreator) {
+        return NextResponse.json(
+          {
+            error:
+              "Forbidden: Members can only delete tasks they created. Admins or Owner can delete any task.",
+          },
+          { status: 403 }
+        );
+      }
+    } else {
+      if (existingTask.creatorId && existingTask.creatorId !== user.id) {
+        return NextResponse.json(
+          { error: "Forbidden: You can only delete your own personal tasks" },
+          { status: 403 }
+        );
+      }
     }
+
+    const teamId = existingTask.teamId;
 
     await prisma.task.delete({
       where: { id },
     });
+
+    // Broadcast sự kiện task_deleted qua Supabase Realtime nếu thuộc team
+    if (teamId) {
+      try {
+        const channel = supabase.channel(`team:${teamId}`);
+        await channel.send({
+          type: "broadcast",
+          event: "task_deleted",
+          payload: { id, teamId },
+        });
+      } catch (e) {
+        console.warn("Could not broadcast task_deleted:", e);
+      }
+    }
 
     return NextResponse.json(
       { message: "Task deleted successfully", id },

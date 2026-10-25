@@ -2,8 +2,10 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getAuthenticatedUser } from "@/lib/auth";
 import { TeamMemberRole } from "@prisma/client";
+import { createInAppNotification } from "@/lib/notifications";
+import { supabase } from "@/lib/supabase";
 
-// POST /api/teams/:id/members – Thêm thành viên vào team bằng email (Chỉ Owner)
+// POST /api/teams/:id/members – Thêm thành viên vào team bằng email (Owner & Admin)
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
@@ -17,21 +19,31 @@ export async function POST(
     const { id: teamId } = await params;
     const team = await prisma.team.findUnique({
       where: { id: teamId },
+      include: {
+        members: {
+          where: { userId: user.id },
+          select: { role: true },
+        },
+      },
     });
 
     if (!team) {
       return NextResponse.json({ error: "Team not found" }, { status: 404 });
     }
 
-    // Chỉ Owner được thêm thành viên
-    if (team.ownerId !== user.id) {
+    // Quyền: Owner hoặc Admin
+    const isOwner = team.ownerId === user.id;
+    const callerMembership = team.members[0];
+    const isAdmin = callerMembership?.role === TeamMemberRole.ADMIN;
+
+    if (!isOwner && !isAdmin) {
       return NextResponse.json(
-        { error: "Forbidden: Only the team Owner can add members" },
+        { error: "Forbidden: Only Team Owner and Admins can add members" },
         { status: 403 }
       );
     }
 
-    const body = await request.json();
+    const body = await request.json().catch(() => ({}));
     const { email, role } = body;
 
     if (!email || typeof email !== "string" || !email.includes("@")) {
@@ -65,16 +77,17 @@ export async function POST(
       },
     });
 
-    if (existingMembership) {
+    if (existingMembership || team.ownerId === targetUser.id) {
       return NextResponse.json(
-        { error: "This user is already a member of the team" },
+        { error: "This user is already a member or owner of the team" },
         { status: 400 }
       );
     }
 
     let memberRole: TeamMemberRole = TeamMemberRole.MEMBER;
-    if (role && Object.values(TeamMemberRole).includes(role)) {
-      memberRole = role as TeamMemberRole;
+    // Chỉ Owner mới được gán ngay role ADMIN khi mời, Admin thông thường mời thành viên với role MEMBER
+    if (role === TeamMemberRole.ADMIN && isOwner) {
+      memberRole = TeamMemberRole.ADMIN;
     }
 
     const newMember = await prisma.teamMember.create({
@@ -89,6 +102,27 @@ export async function POST(
         },
       },
     });
+
+    // Tạo thông báo in-app cho thành viên mới
+    await createInAppNotification({
+      userId: targetUser.id,
+      title: "Added to Team",
+      content: `You have been added to team "${team.name}" as ${memberRole}.`,
+      type: "TEAM_INVITED",
+      link: `/teams/${teamId}`,
+    });
+
+    // Broadcast sự kiện qua Supabase Realtime
+    try {
+      const channel = supabase.channel(`team:${teamId}`);
+      await channel.send({
+        type: "broadcast",
+        event: "member_added",
+        payload: newMember,
+      });
+    } catch (e) {
+      console.warn("Could not broadcast member_added:", e);
+    }
 
     return NextResponse.json(newMember, { status: 201 });
   } catch (error) {

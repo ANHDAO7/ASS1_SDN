@@ -36,10 +36,12 @@ model User {
   password        String
   createdAt       DateTime     @default(now())
 
-  ownedTeams      Team[]       @relation("TeamOwner")
+  ownedTeams      Team[]         @relation("TeamOwner")
   memberships     TeamMember[]
-  assignedTasks   Task[]       @relation("TaskAssignee")
-  createdTasks    Task[]       @relation("TaskCreator")
+  assignedTasks   Task[]         @relation("TaskAssignee")
+  createdTasks    Task[]         @relation("TaskCreator")
+  messages        Message[]
+  notifications   Notification[]
 
   @@map("users")
 }
@@ -55,6 +57,7 @@ model Team {
   owner       User         @relation("TeamOwner", fields: [ownerId], references: [id], onDelete: Cascade)
   members     TeamMember[]
   tasks       Task[]
+  messages    Message[]
 
   @@map("teams")
 }
@@ -91,4 +94,32 @@ model Task {
   creator     User?        @relation("TaskCreator", fields: [creatorId], references: [id], onDelete: SetNull)
 
   @@map("tasks")
+}
+
+model Message {
+  id        String   @id @default(cuid())
+  content   String
+  teamId    String
+  senderId  String
+  createdAt DateTime @default(now())
+
+  team      Team     @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  sender    User     @relation(fields: [senderId], references: [id], onDelete: Cascade)
+
+  @@map("messages")
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String
+  content   String
+  type      String   @default("INFO") // TASK_ASSIGNED, TEAM_INVITED, ROLE_CHANGED
+  link      String?
+  isRead    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@map("notifications")
 }
