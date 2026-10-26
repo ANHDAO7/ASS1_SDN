@@ -118,12 +118,13 @@ export async function POST(
 
     // Broadcast thời gian thực qua kênh Supabase Realtime cho phòng chat
     try {
-      const channel = supabase.channel(`team:${teamId}`);
+      const channel = supabase.channel(`team-chat:${teamId}`);
       await channel.send({
         type: "broadcast",
         event: "new_message",
         payload: newMessage,
       });
+      supabase.removeChannel(channel);
     } catch (realtimeErr) {
       console.warn("Could not broadcast message via Supabase:", realtimeErr);
     }

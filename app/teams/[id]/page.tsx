@@ -206,7 +206,11 @@ export default function TeamDetailPage() {
       .subscribe();
 
     return () => {
-      channel.unsubscribe();
+      try {
+        supabase.removeChannel(channel);
+      } catch {
+        channel.unsubscribe();
+      }
     };
   }, [teamId, fetchTeamData]);
 

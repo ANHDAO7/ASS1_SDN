@@ -30,6 +30,8 @@ export default function TeamChat({ teamId, currentUser }: TeamChatProps) {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
+  const channelRef = useRef<any>(null);
+
   // Tải lịch sử tin nhắn của team
   const fetchMessages = useCallback(async () => {
     try {
@@ -56,13 +58,16 @@ export default function TeamChat({ teamId, currentUser }: TeamChatProps) {
 
   // Thiết lập Supabase Realtime Channel: broadcast + presence
   useEffect(() => {
-    const channel = supabase.channel(`team:${teamId}`, {
+    const channelName = `team-chat:${teamId}`;
+    const channel = supabase.channel(channelName, {
       config: {
         presence: {
           key: currentUser.id,
         },
       },
     });
+
+    channelRef.current = channel;
 
     // 1. Nhận tin nhắn mới tức thì
     channel.on("broadcast", { event: "new_message" }, (payload) => {
@@ -93,33 +98,46 @@ export default function TeamChat({ teamId, currentUser }: TeamChatProps) {
     // 3. Online Presence
     channel
       .on("presence", { event: "sync" }, () => {
-        const state = channel.presenceState();
-        const users: OnlineUser[] = [];
-        for (const key in state) {
-          const presences = state[key] as Array<{ id?: string; name?: string }>;
-          if (presences && presences[0]?.name) {
-            users.push({
-              id: presences[0].id || key,
-              name: presences[0].name,
-            });
+        try {
+          const state = channel.presenceState();
+          const users: OnlineUser[] = [];
+          for (const key in state) {
+            const presences = state[key] as Array<{ id?: string; name?: string }>;
+            if (presences && presences[0]?.name) {
+              users.push({
+                id: presences[0].id || key,
+                name: presences[0].name,
+              });
+            }
           }
+          setOnlineUsers(users);
+        } catch (syncErr) {
+          console.warn("Presence sync error:", syncErr);
         }
-        setOnlineUsers(users);
       })
       .subscribe(async (status) => {
         if (status === "SUBSCRIBED") {
-          await channel.track({
-            id: currentUser.id,
-            name: currentUser.name,
-            onlineAt: new Date().toISOString(),
-          });
+          try {
+            await channel.track({
+              id: currentUser.id,
+              name: currentUser.name,
+              onlineAt: new Date().toISOString(),
+            });
+          } catch (trackErr) {
+            console.warn("Track presence failed:", trackErr);
+          }
         }
       });
 
     return () => {
-      channel.unsubscribe();
+      channelRef.current = null;
+      try {
+        supabase.removeChannel(channel);
+      } catch (err) {
+        channel.unsubscribe();
+      }
     };
-  }, [teamId, currentUser]);
+  }, [teamId, currentUser.id, currentUser.name]);
 
   // Xử lý typing indicator
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -127,8 +145,7 @@ export default function TeamChat({ teamId, currentUser }: TeamChatProps) {
 
     // Gửi broadcast đang nhập
     try {
-      const channel = supabase.channel(`team:${teamId}`);
-      channel.send({
+      channelRef.current?.send({
         type: "broadcast",
         event: "user_typing",
         payload: { userName: currentUser.name, isTyping: true },
@@ -136,7 +153,7 @@ export default function TeamChat({ teamId, currentUser }: TeamChatProps) {
 
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
       typingTimeoutRef.current = setTimeout(() => {
-        channel.send({
+        channelRef.current?.send({
           type: "broadcast",
           event: "user_typing",
           payload: { userName: currentUser.name, isTyping: false },
@@ -159,8 +176,7 @@ export default function TeamChat({ teamId, currentUser }: TeamChatProps) {
 
       // Dừng typing indicator ngay lập tức
       try {
-        const channel = supabase.channel(`team:${teamId}`);
-        channel.send({
+        channelRef.current?.send({
           type: "broadcast",
           event: "user_typing",
           payload: { userName: currentUser.name, isTyping: false },
